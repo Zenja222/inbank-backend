@@ -2,11 +2,11 @@ package ee.taltech.inbankbackend.service;
 
 import com.github.vladislavgoltjajev.personalcode.locale.estonia.EstonianPersonalCodeValidator;
 import ee.taltech.inbankbackend.config.DecisionEngineConstants;
-import ee.taltech.inbankbackend.exceptions.InvalidLoanAmountException;
-import ee.taltech.inbankbackend.exceptions.InvalidLoanPeriodException;
-import ee.taltech.inbankbackend.exceptions.InvalidPersonalCodeException;
-import ee.taltech.inbankbackend.exceptions.NoValidLoanException;
+import ee.taltech.inbankbackend.exceptions.*;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 
 /**
  * A service class that provides a method for calculating an approved loan amount and period for a customer.
@@ -37,7 +37,7 @@ public class DecisionEngine {
      */
     public Decision calculateApprovedLoan(String personalCode, Long loanAmount, int loanPeriod)
             throws InvalidPersonalCodeException, InvalidLoanAmountException, InvalidLoanPeriodException,
-            NoValidLoanException {
+            NoValidLoanException, InvalidAgeException {
         try {
             verifyInputs(personalCode, loanAmount, loanPeriod);
         } catch (Exception e) {
@@ -51,17 +51,14 @@ public class DecisionEngine {
             throw new NoValidLoanException("No valid loan found!");
         }
 
-        while (highestValidLoanAmount(loanPeriod) < DecisionEngineConstants.MINIMUM_LOAN_AMOUNT) {
-            loanPeriod++;
-        }
+        int calculatedLoanAmount = highestValidLoanAmount(loanAmount,loanPeriod);
 
-        if (loanPeriod <= DecisionEngineConstants.MAXIMUM_LOAN_PERIOD) {
-            outputLoanAmount = Math.min(DecisionEngineConstants.MAXIMUM_LOAN_AMOUNT, highestValidLoanAmount(loanPeriod));
+        if (calculatedLoanAmount <= DecisionEngineConstants.MAXIMUM_LOAN_PERIOD) {
+            outputLoanAmount = Math.min(DecisionEngineConstants.MAXIMUM_LOAN_AMOUNT, calculatedLoanAmount);
+            return new Decision(outputLoanAmount, loanPeriod, null);
         } else {
             throw new NoValidLoanException("No valid loan found!");
         }
-
-        return new Decision(outputLoanAmount, loanPeriod, null);
     }
 
     /**
@@ -69,9 +66,25 @@ public class DecisionEngine {
      *
      * @return Largest valid loan amount
      */
-    private int highestValidLoanAmount(int loanPeriod) {
-        return creditModifier * loanPeriod;
+    private int highestValidLoanAmount(Long loanAmount, int loanPeriod) {
+        return (int) ((creditModifier / loanAmount) * loanPeriod);
     }
+
+    /**
+     * TICKET-102.
+     * Verify that age is 18-78. 78 is average age of life in Estonia
+     */
+    private boolean ageCalculation(String personalCode) {
+        String birthday = personalCode.substring(1, 7);
+        int century = Integer.parseInt(personalCode.substring(0, 1)) < 3 ? 1900 : 2000;
+        String fullBirthdateStr = century + birthday;
+        LocalDate birthdate = LocalDate.parse(fullBirthdateStr, DateTimeFormatter.ofPattern("d-MMM-yyyy"));
+        LocalDate currentDate = LocalDate.now();
+        int age = currentDate.getYear() - birthdate.getYear();
+
+        return age >= 18 && age <= 78;
+    }
+
 
     /**
      * Calculates the credit modifier of the customer to according to the last four digits of their ID code.
@@ -109,19 +122,21 @@ public class DecisionEngine {
      * @throws InvalidLoanPeriodException If the requested loan period is invalid
      */
     private void verifyInputs(String personalCode, Long loanAmount, int loanPeriod)
-            throws InvalidPersonalCodeException, InvalidLoanAmountException, InvalidLoanPeriodException {
-
+            throws InvalidPersonalCodeException, InvalidAgeException,
+            InvalidLoanAmountException, InvalidLoanPeriodException
+             {
         if (!validator.isValid(personalCode)) {
             throw new InvalidPersonalCodeException("Invalid personal ID code!");
         }
-        if (!(DecisionEngineConstants.MINIMUM_LOAN_AMOUNT <= loanAmount)
-                || !(loanAmount <= DecisionEngineConstants.MAXIMUM_LOAN_AMOUNT)) {
+        if(!ageCalculation(personalCode)){
+            throw new InvalidAgeException("Invalid age! Age should be between 18 and 78!");
+        }
+        if (loanAmount < DecisionEngineConstants.MINIMUM_LOAN_AMOUNT || loanAmount > DecisionEngineConstants.MAXIMUM_LOAN_AMOUNT) {
             throw new InvalidLoanAmountException("Invalid loan amount!");
         }
-        if (!(DecisionEngineConstants.MINIMUM_LOAN_PERIOD <= loanPeriod)
-                || !(loanPeriod <= DecisionEngineConstants.MAXIMUM_LOAN_PERIOD)) {
+        if (loanPeriod < DecisionEngineConstants.MINIMUM_LOAN_PERIOD || loanPeriod > DecisionEngineConstants.MAXIMUM_LOAN_PERIOD) {
             throw new InvalidLoanPeriodException("Invalid loan period!");
         }
-
     }
+
 }
